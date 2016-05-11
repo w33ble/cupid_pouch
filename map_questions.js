@@ -1,11 +1,11 @@
 var fs = require('fs');
 var path = require('path');
 var rimraf = require('rimraf');
-
-var dbPath = 'db/questions';
-rimraf.sync(path.resolve(dbPath));
 var PouchDB = require('pouchdb');
-var db = new PouchDB(dbPath);
+var config = require('./config');
+
+rimraf.sync(path.resolve(config.questionDbPath));
+var db = new PouchDB(config.questionDbPath);
 var tasks = [];
 
 var binaryCSV = require('binary-csv');
