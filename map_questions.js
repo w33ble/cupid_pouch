@@ -1,11 +1,12 @@
 var fs = require('fs');
 var path = require('path');
-var questionsFile = path.resolve('output', 'questions.json');
+var rimraf = require('rimraf');
 
-var low = require('lowdb');
-var storage = require('lowdb/file-sync');
-fs.unlinkSync(questionsFile);
-var db = low(questionsFile, { storage }, false);
+var dbPath = 'db/questions';
+rimraf.sync(path.resolve(dbPath));
+var PouchDB = require('pouchdb');
+var db = new PouchDB(dbPath);
+var tasks = [];
 
 var binaryCSV = require('binary-csv');
 var questionParser = binaryCSV({
@@ -21,13 +22,27 @@ fs.createReadStream(path.join(__dirname, 'data', 'question_data.csv'))
 .pipe(questionParser)
 .on('data', function (line) {
   if (line.id.match(/^q[1-9]/)) {
-    Object.assign(line, {
+    var op = db.put({
+      _id: line.id,
+      text: line.text,
+      option_1: line.option_1,
+      option_2: line.option_2,
+      option_3: line.option_3,
+      option_4: line.option_4,
+      N: line.N,
+      Type: line.Type,
+      Order: line.Order,
+      Keywords: line.Keywords,
       option_1_count: 0,
       option_2_count: 0,
       option_3_count: 0,
-      option_4_count: 0,
+      option_4_count: 0
     })
-    db('questions').push(line);
+    .catch(function (err) {
+      console.log('ERR', line.id, err);
+      throw err;
+    });
+    tasks.push(op);
   }
 })
 .on('end', function () {
@@ -37,22 +52,30 @@ fs.createReadStream(path.join(__dirname, 'data', 'question_data.csv'))
   .pipe(testParser)
   .on('data', function (line) {
     if (line.id.match(/^q[1-9]/)) {
-      db('questions')
-      .chain()
-      .find({ id: line.id })
-      .thru(function (q) {
-        if (!q) return;
-        q.option_correct = line.option_correct;
-        q.Keywords += '; test';
-        return q;
+      var op = db.get(line.id)
+      .then(function (doc) {
+        doc.option_correct = line.option_correct;
+        doc.Keywords += '; test';
+        return db.put(doc);
       })
-      .value();
+      .catch(function (err) {
+        if (err.status === 404) return;
+        console.log('ERR', line.id, err);
+        throw err;
+      });
+      tasks.push(op);
     }
   })
   .on('end', function () {
     console.log('Tests DONE');
-    console.log('writing questions file');
-    db.write();
-    console.log('Questions Compiled', questionsFile);
+
+    Promise.all(tasks)
+    .then(function () {
+      console.log('Questions compiled successfully');
+    })
+    .catch(function (err) {
+      console.log('ERROR');
+      console.log(err);
+    })
   })
 })
