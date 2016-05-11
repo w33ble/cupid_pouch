@@ -1,6 +1,6 @@
 var fs = require('fs');
 var path = require('path');
-var questionsFile = path.resolve('questions.json');
+var questionsFile = path.resolve('output', 'questions.json');
 
 var low = require('lowdb');
 var storage = require('lowdb/file-sync');
