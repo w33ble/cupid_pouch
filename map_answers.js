@@ -4,9 +4,15 @@ var exec = require('child_process').execSync;
 var _ = require('lodash');
 var Progress = require('progress');
 var PouchDB = require('pouchdb');
+var rimraf = require('rimraf');
 var config = require('./config');
 
+var users = [];
+var bulkWriteSize = 1000;
+
 var questions = new PouchDB(config.questionDbPath);
+rimraf.sync(path.resolve(config.answerDbPath));
+var answers = new PouchDB(config.answerDbPath);
 var tasks = [];
 
 var binaryCSV = require('binary-csv');
@@ -14,10 +20,6 @@ var usersParser = binaryCSV({
   separator: ',',
   json: true
 });
-
-// create target file
-var wstream = fs.createWriteStream(path.resolve('output', 'answers.json'));
-wstream.write('{ "users": [\n');
 
 // helper to pull question from the lookup, by id
 var getQuestion = _.memoize(function (id) {
@@ -62,6 +64,10 @@ var bar = new Progress(' Processing [:bar] :current/:total (:percent) :etas', {
 var count = 0;
 var chain = Promise.resolve();
 
+function leftPad(t,v){
+  v+="";return v.length>=t?v:leftPad(t,'0'+v);
+}
+
 fs.createReadStream(userDataFile)
 .pipe(usersParser)
 .on('data', function (line) {
@@ -71,31 +77,43 @@ fs.createReadStream(userDataFile)
     var cols = Object.keys(line);
 
     var tasks = cols.map(function (qid) {
-      var a = line[qid];
-      // console.log(qid, i, cols.length);
+      var answer = line[qid];
 
       return getQuestion(qid)
       .then(function (question) {
         if (question) {
-          // console.log(question._id, i);
-          mapped[qid] = { q: question.text, a: a };
-          return tallyAnswer(question, a);
+          mapped[qid] = { q: question.text, a: answer };
+          return tallyAnswer(question, answer);
         }
-        mapped[qid] = a;
+        mapped[qid] = answer;
       });
     });
 
     return Promise.all(tasks)
     .then(function () {
+      users.push(Object.assign({ _id: 'u' + leftPad(4, count++) }, line));
+
+      if (users.length === bulkWriteSize) {
+        return answers.bulkDocs(users)
+        .then(function () {
+          users = [];
+          bar.tick();
+        })
+      }
+
       bar.tick();
-      wstream.write(JSON.stringify(mapped));
-    });
+    })
+    .catch(function (err) {
+      console.log(err);
+      bar.tick();
+    })
   });
 })
 .on('end', function () {
-  wstream.write('\n] }');
-  wstream.end();
   chain
+  .then(function () {
+    if (users.length) return answers.put(users);
+  })
   .then(function () { console.log('Successfully saved user data', lineCount) })
   .then(updateQuestions);
 });
