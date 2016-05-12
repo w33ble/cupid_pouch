@@ -8,7 +8,8 @@ var rimraf = require('rimraf');
 var config = require('./config');
 
 var users = [];
-var bulkWriteSize = 1000;
+var answerCounts = {};
+var bulkWriteSize = 250;
 
 var questions = new PouchDB(config.questionDbPath);
 rimraf.sync(path.resolve(config.answerDbPath));
@@ -21,7 +22,7 @@ var usersParser = binaryCSV({
   json: true
 });
 
-// helper to pull question from the lookup, by id
+// helper to fetch question by id (memoized for speed)
 var getQuestion = _.memoize(function (id) {
   return questions.get(id)
   .catch(function (err) {
@@ -30,7 +31,7 @@ var getQuestion = _.memoize(function (id) {
   });
 });
 
-var answerCounts = {};
+// helper to fetch answer index (memoized for speed)
 var getAnswerIndex = _.memoize(function (doc, answer) {
   var match = answer.toLowerCase();
   if (match === doc.option_1.toLowerCase()) return 'option_1_count';
@@ -40,6 +41,7 @@ var getAnswerIndex = _.memoize(function (doc, answer) {
 }, function (doc, answer) {
   return doc._id + answer;
 });
+
 var tallyAnswer = function (doc, answer) {
   if (!doc) return;
   if (answer.length === 0) return;
@@ -64,14 +66,11 @@ var bar = new Progress(' Processing [:bar] :current/:total (:percent) :etas', {
 var count = 0;
 var chain = Promise.resolve();
 
-function leftPad(t,v){
-  v+="";return v.length>=t?v:leftPad(t,'0'+v);
-}
-
 fs.createReadStream(userDataFile)
 .pipe(usersParser)
 .on('data', function (line) {
   var mapped = {};
+  var userId = count++;
 
   chain = chain.then(function () {
     var cols = Object.keys(line);
@@ -91,7 +90,7 @@ fs.createReadStream(userDataFile)
 
     return Promise.all(tasks)
     .then(function () {
-      users.push(Object.assign({ _id: 'u' + leftPad(4, count++) }, line));
+      users.push(Object.assign({ _id: 'u' + leftPad(4, userId) }, line));
 
       if (users.length === bulkWriteSize) {
         return answers.bulkDocs(users)
@@ -112,7 +111,7 @@ fs.createReadStream(userDataFile)
 .on('end', function () {
   chain
   .then(function () {
-    if (users.length) return answers.put(users);
+    if (users.length) return answers.bulkDocs(users);
   })
   .then(function () { console.log('Successfully saved user data', lineCount) })
   .then(updateQuestions);
@@ -121,26 +120,28 @@ fs.createReadStream(userDataFile)
 function updateQuestions() {
   var questionIds = Object.keys(answerCounts);
   var questionCount = questionIds.length;
-  console.log('Updating questions counts (%d total)...', questionCount);
-
-  var bar = new Progress(' Processing [:bar] :current/:total (:percent) :etas', {
-    width: 80,
-    total: questionCount
-  });
+  console.log('Updating question counts (%d total)...', questionCount);
 
   var tasks = questionIds.map(function (questionId) {
     return questions.get(questionId)
     .then(function (doc) {
-      Object.assign(doc, answerCounts[questionId]);
-      return questions.put(doc)
-      .then(function () {
-        bar.tick();
-      });
+      return Object.assign(doc, answerCounts[questionId]);
     })
   });
 
   return Promise.all(tasks)
-  .then(function () {
-    console.log('Successfully update %d questions', questionIds.length);
+  .then(function (docs) {
+    return questions.bulkDocs(docs);
   })
+  .then(function () {
+    console.log('Successfully updated %d questions', questionIds.length);
+  })
+  .catch(function (err) {
+    console.log('ERROR');
+    console.log(err);
+  })
+}
+
+function leftPad(t,v){
+  v+="";return v.length>=t?v:leftPad(t,'0'+v);
 }
