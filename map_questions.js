@@ -46,7 +46,8 @@ fs.createReadStream(path.join(__dirname, 'data', 'question_data.csv'))
   }
 })
 .on('end', function () {
-  console.log('Questions DONE');
+  console.log('Question processing completed');
+  var questionCount = tasks.length;
 
   fs.createReadStream(path.join(__dirname, 'data', 'test_items.csv'))
   .pipe(testParser)
@@ -63,15 +64,16 @@ fs.createReadStream(path.join(__dirname, 'data', 'question_data.csv'))
         console.log('ERR', line.id, err);
         throw err;
       });
+
       tasks.push(op);
     }
   })
   .on('end', function () {
-    console.log('Tests DONE');
+    console.log('Test processing completed');
 
     Promise.all(tasks)
     .then(function () {
-      console.log('Questions compiled successfully');
+      console.log('Successfully saved %d questions', questionCount);
     })
     .catch(function (err) {
       console.log('ERROR');
